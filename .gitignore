@@ -1,1 +1,4 @@
 venv
+pingmongo.py
+mongostr.txt
+mongostr.sh
