@@ -2,3 +2,5 @@ venv
 pingmongo.py
 mongostr.txt
 mongostr.sh
+setup.sh
+music_ai_dashboard_fixed.py

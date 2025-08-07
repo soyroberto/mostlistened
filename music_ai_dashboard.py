@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-🎵 Music AI Inferencing Dashboard - Enhanced with CSV Support
+🎵 Music AI Inferencing Dashboard - Fixed Version
 Comprehensive Streamlit app for analyzing music data from 2016-2024
 with AI inferencing, year filtering, dynamic recommendations, Last.fm integration,
-and automatic CSV to JSON conversion
+automatic CSV to JSON conversion, and improved error handling
 
-Usage: streamlit run music_ai_dashboard_enhanced.py
+Usage: streamlit run music_ai_dashboard.py
 """
 
 import streamlit as st
@@ -86,6 +86,13 @@ st.markdown("""
         border-left: 5px solid #007bff;
         margin: 1rem 0;
     }
+    .error-box {
+        background-color: #f8d7da;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 5px solid #dc3545;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,22 +160,49 @@ def classify_mood(row):
         return 'Sad/Mellow'
 
 def perform_clustering(df, n_clusters=3):
-    """Perform K-means clustering on audio features"""
+    """
+    Perform K-means clustering on audio features with improved error handling
+    
+    FIXED: Now handles cases where n_samples < n_clusters
+    """
     audio_features = ['Danceability', 'Energy', 'Valence', 'Acousticness', 
                      'Instrumentalness', 'Liveness', 'Speechiness']
     
     # Prepare data
     X = df[audio_features].fillna(df[audio_features].mean())
     
-    # Standardize features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # FIX: Check if we have enough samples for clustering
+    n_samples = len(X)
     
-    # Perform clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    clusters = kmeans.fit_predict(X_scaled)
+    if n_samples < 2:
+        # Not enough samples for clustering - return single cluster
+        st.warning(f"⚠️ Only {n_samples} song(s) available. Clustering requires at least 2 songs.")
+        clusters = np.zeros(n_samples, dtype=int)  # All songs in cluster 0
+        return clusters, None, None
     
-    return clusters, kmeans, scaler
+    # FIX: Adjust number of clusters if we don't have enough samples
+    effective_clusters = min(n_clusters, n_samples)
+    
+    if effective_clusters < n_clusters:
+        st.info(f"ℹ️ Adjusted clusters from {n_clusters} to {effective_clusters} due to limited data ({n_samples} songs)")
+    
+    try:
+        # Standardize features
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Perform clustering with adjusted number of clusters
+        kmeans = KMeans(n_clusters=effective_clusters, random_state=42, n_init=10)
+        clusters = kmeans.fit_predict(X_scaled)
+        
+        return clusters, kmeans, scaler
+        
+    except Exception as e:
+        # FIX: Fallback error handling
+        st.error(f"❌ Clustering failed: {str(e)}")
+        st.info("🔄 Falling back to single cluster assignment")
+        clusters = np.zeros(n_samples, dtype=int)  # All songs in cluster 0
+        return clusters, None, None
 
 def create_radar_chart(df, title="Audio Features Profile"):
     """Create a radar chart for audio features"""
@@ -338,7 +372,7 @@ def main():
     # Header
     st.markdown('<h1 class="main-header">🎵 Music AI Inferencing Dashboard</h1>', unsafe_allow_html=True)
     st.markdown("**Analyze your music listening patterns from 2016-2024 with AI-powered insights and Last.fm integration**")
-    st.markdown("**✨ New: Automatic CSV to JSON conversion support!**")
+    st.markdown("**✨ Enhanced: Automatic CSV to JSON conversion + Improved error handling!**")
     
     # Setup data source
     data_file, is_csv = setup_data_source()
@@ -491,8 +525,11 @@ Another Song,Another Artist,0.60,0.70,0.80"""
             avg_popularity = filtered_df['Popularity'].mean()
             st.metric("Avg Popularity", f"{avg_popularity:.1f}")
         with col4:
-            total_hours = filtered_df['Duration (ms)'].sum() / (1000 * 60 * 60)
-            st.metric("Total Hours", f"{total_hours:.1f}")
+            if 'Duration (ms)' in filtered_df.columns:
+                total_hours = filtered_df['Duration (ms)'].sum() / (1000 * 60 * 60)
+                st.metric("Total Hours", f"{total_hours:.1f}")
+            else:
+                st.metric("Total Hours", "N/A")
         
         # Audio features profile
         col1, col2 = st.columns(2)
@@ -553,80 +590,106 @@ Another Song,Another Artist,0.60,0.70,0.80"""
         st.header("🎯 AI-Powered Music Clustering")
         st.markdown("Discover hidden patterns in your music taste using machine learning clustering.")
         
-        # Clustering controls
+        # FIXED: Better clustering controls with validation
         col1, col2 = st.columns([1, 3])
         
         with col1:
-            n_clusters = st.slider("Number of Clusters", min_value=2, max_value=6, value=3)
+            # FIX: Limit max clusters based on available data
+            max_possible_clusters = min(6, len(filtered_df))
+            if max_possible_clusters < 2:
+                st.warning("⚠️ Need at least 2 songs for clustering")
+                n_clusters = 1
+            else:
+                n_clusters = st.slider(
+                    "Number of Clusters", 
+                    min_value=2, 
+                    max_value=max_possible_clusters, 
+                    value=min(3, max_possible_clusters),
+                    help=f"Maximum {max_possible_clusters} clusters available for {len(filtered_df)} songs"
+                )
+        
+        # FIXED: Perform clustering with improved error handling
+        try:
+            clusters, kmeans, scaler = perform_clustering(filtered_df, n_clusters)
+            filtered_df['Cluster'] = clusters
             
-        # Perform clustering
-        clusters, kmeans, scaler = perform_clustering(filtered_df, n_clusters)
-        filtered_df['Cluster'] = clusters
-        
-        # Cluster analysis
-        st.subheader("🔍 Cluster Analysis")
-        
-        cluster_stats = []
-        for i in range(n_clusters):
-            cluster_songs = filtered_df[filtered_df['Cluster'] == i]
-            cluster_stats.append({
-                'Cluster': f'Cluster {i+1}',
-                'Songs': len(cluster_songs),
-                'Avg Energy': cluster_songs['Energy'].mean(),
-                'Avg Valence': cluster_songs['Valence'].mean(),
-                'Avg Danceability': cluster_songs['Danceability'].mean(),
-                'Top Artist': cluster_songs['Artist Name(s)'].mode().iloc[0] if len(cluster_songs) > 0 else 'N/A'
-            })
-        
-        cluster_df = pd.DataFrame(cluster_stats)
-        st.dataframe(cluster_df, use_container_width=True)
-        
-        # Cluster visualizations
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # PCA visualization
-            audio_features = ['Danceability', 'Energy', 'Valence', 'Acousticness', 
-                             'Instrumentalness', 'Liveness', 'Speechiness']
-            X = filtered_df[audio_features].fillna(filtered_df[audio_features].mean())
+            # Get actual number of clusters created
+            actual_clusters = len(np.unique(clusters))
             
-            pca = PCA(n_components=2)
-            X_pca = pca.fit_transform(StandardScaler().fit_transform(X))
+            # Cluster analysis
+            st.subheader("🔍 Cluster Analysis")
             
-            fig = px.scatter(
-                x=X_pca[:, 0], 
-                y=X_pca[:, 1], 
-                color=filtered_df['Cluster'].astype(str),
-                title="Music Clusters (PCA Visualization)",
-                labels={'x': f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)', 
-                       'y': f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)'},
-                hover_data={'Track Name': filtered_df['Track Name'], 
-                           'Artist': filtered_df['Artist Name(s)']}
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Energy vs Valence by cluster
-            fig = px.scatter(
-                filtered_df, 
-                x='Valence', 
-                y='Energy',
-                color='Cluster',
-                title="Energy vs Valence by Cluster",
-                hover_data=['Track Name', 'Artist Name(s)']
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Sample songs from each cluster
-        st.subheader("🎵 Sample Songs from Each Cluster")
-        for i in range(n_clusters):
-            cluster_songs = filtered_df[filtered_df['Cluster'] == i]
-            if len(cluster_songs) > 0:
-                st.write(f"**Cluster {i+1} ({len(cluster_songs)} songs):**")
-                sample_songs = cluster_songs.sample(min(5, len(cluster_songs)))
-                for _, song in sample_songs.iterrows():
-                    st.write(f"• {song['Track Name']} by {song['Artist Name(s)']}")
-                st.write("")
+            cluster_stats = []
+            for i in range(actual_clusters):
+                cluster_songs = filtered_df[filtered_df['Cluster'] == i]
+                if len(cluster_songs) > 0:
+                    cluster_stats.append({
+                        'Cluster': f'Cluster {i+1}',
+                        'Songs': len(cluster_songs),
+                        'Avg Energy': cluster_songs['Energy'].mean(),
+                        'Avg Valence': cluster_songs['Valence'].mean(),
+                        'Avg Danceability': cluster_songs['Danceability'].mean(),
+                        'Top Artist': cluster_songs['Artist Name(s)'].mode().iloc[0] if len(cluster_songs) > 0 else 'N/A'
+                    })
+            
+            if cluster_stats:
+                cluster_df = pd.DataFrame(cluster_stats)
+                st.dataframe(cluster_df, use_container_width=True)
+                
+                # Cluster visualizations (only if we have valid clustering)
+                if kmeans is not None and len(filtered_df) >= 2:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # PCA visualization
+                        audio_features = ['Danceability', 'Energy', 'Valence', 'Acousticness', 
+                                         'Instrumentalness', 'Liveness', 'Speechiness']
+                        X = filtered_df[audio_features].fillna(filtered_df[audio_features].mean())
+                        
+                        if len(X) >= 2:  # Need at least 2 samples for PCA
+                            pca = PCA(n_components=2)
+                            X_pca = pca.fit_transform(StandardScaler().fit_transform(X))
+                            
+                            fig = px.scatter(
+                                x=X_pca[:, 0], 
+                                y=X_pca[:, 1], 
+                                color=filtered_df['Cluster'].astype(str),
+                                title="Music Clusters (PCA Visualization)",
+                                labels={'x': f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)', 
+                                       'y': f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)'},
+                                hover_data={'Track Name': filtered_df['Track Name'], 
+                                           'Artist': filtered_df['Artist Name(s)']}
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        # Energy vs Valence by cluster
+                        fig = px.scatter(
+                            filtered_df, 
+                            x='Valence', 
+                            y='Energy',
+                            color='Cluster',
+                            title="Energy vs Valence by Cluster",
+                            hover_data=['Track Name', 'Artist Name(s)']
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                # Sample songs from each cluster
+                st.subheader("🎵 Sample Songs from Each Cluster")
+                for i in range(actual_clusters):
+                    cluster_songs = filtered_df[filtered_df['Cluster'] == i]
+                    if len(cluster_songs) > 0:
+                        st.write(f"**Cluster {i+1} ({len(cluster_songs)} songs):**")
+                        sample_songs = cluster_songs.sample(min(5, len(cluster_songs)))
+                        for _, song in sample_songs.iterrows():
+                            st.write(f"• {song['Track Name']} by {song['Artist Name(s)']}")
+                        st.write("")
+            else:
+                st.info("No clusters could be created with the current data.")
+                
+        except Exception as e:
+            st.error(f"❌ Clustering analysis failed: {str(e)}")
+            st.info("💡 Try adjusting your filters to include more songs.")
     
     with tab3:
         st.header("😊 Mood Analysis & Classification")
@@ -679,13 +742,16 @@ Another Song,Another Artist,0.60,0.70,0.80"""
             y = filtered_df['Mood']
             
             if len(y.unique()) > 1:  # Ensure multiple classes
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-                
-                rf_classifier = RandomForestClassifier(n_estimators=50, random_state=42)
-                rf_classifier.fit(X_train, y_train)
-                accuracy = rf_classifier.score(X_test, y_test)
-                
-                st.success(f"🎯 AI Mood Classification Accuracy: {accuracy:.1%}")
+                try:
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+                    
+                    rf_classifier = RandomForestClassifier(n_estimators=50, random_state=42)
+                    rf_classifier.fit(X_train, y_train)
+                    accuracy = rf_classifier.score(X_test, y_test)
+                    
+                    st.success(f"🎯 AI Mood Classification Accuracy: {accuracy:.1%}")
+                except Exception as e:
+                    st.warning(f"⚠️ Could not train mood classifier: {str(e)}")
     
     with tab4:
         st.header("🎵 AI-Powered Dynamic Recommendations")
@@ -695,7 +761,7 @@ Another Song,Another Artist,0.60,0.70,0.80"""
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            n_recommendations = st.slider("Number of Recommendations", 5, 20, 10)
+            n_recommendations = st.slider("Number of Recommendations", 5, min(20, len(filtered_df)), min(10, len(filtered_df)))
         with col2:
             randomness = st.slider("Randomness Level", 0.0, 0.5, 0.2, 
                                  help="Higher values = more diverse recommendations")
@@ -731,7 +797,8 @@ Another Song,Another Artist,0.60,0.70,0.80"""
             
             with col1:
                 st.write(f"**{i}. {rec['Track Name']}**")
-                st.write(f"by {rec['Artist Name(s)']} • {rec['Album Name']} ({rec['Year']})")
+                album_info = f" • {rec['Album Name']}" if pd.notna(rec['Album Name']) else ""
+                st.write(f"by {rec['Artist Name(s)']}{album_info} ({rec['Year']})")
             
             with col2:
                 st.metric("AI Similarity", f"{rec['Similarity']:.3f}")
