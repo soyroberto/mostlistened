@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-🎵 Music AI Inferencing Dashboard - Fixed Version
+🎵 Music AI Inferencing Dashboard - Bulletproof Version
 Comprehensive Streamlit app for analyzing music data from 2016-2024
 with AI inferencing, year filtering, dynamic recommendations, Last.fm integration,
-automatic CSV to JSON conversion, and improved error handling
+automatic CSV to JSON conversion, and bulletproof error handling
 
 Usage: streamlit run music_ai_dashboard.py
 """
@@ -277,6 +277,33 @@ def generate_dynamic_recommendations(df, user_profile, n_recommendations=10, ran
     
     return recommendations[['Track Name', 'Artist Name(s)', 'Album Name', 'Similarity', 'Year', 'Popularity']]
 
+def safe_slider(label, min_val, max_val, default_val, help_text=None, key=None):
+    """
+    BULLETPROOF SLIDER: Ensures min_value < max_value always
+    
+    This function prevents the StreamlitAPIException by validating slider parameters
+    """
+    # BULLETPROOF FIX: Ensure min_val < max_val
+    if min_val >= max_val:
+        # If min >= max, adjust values to make them valid
+        if max_val <= 1:
+            # Very small dataset - use fixed values
+            min_val = 1
+            max_val = 2
+            default_val = 1
+            st.warning(f"⚠️ {label}: Adjusted to minimum range due to limited data")
+        else:
+            # Adjust min_val to be less than max_val
+            min_val = max(1, max_val - 1)
+            default_val = min(default_val, max_val)
+            st.info(f"ℹ️ {label}: Adjusted range to {min_val}-{max_val} due to data constraints")
+    
+    # BULLETPROOF FIX: Ensure default_val is within range
+    default_val = max(min_val, min(default_val, max_val))
+    
+    # Create the slider with validated parameters
+    return st.slider(label, min_value=min_val, max_value=max_val, value=default_val, help=help_text, key=key)
+
 def setup_data_source():
     """Setup data source selection with CSV and JSON support"""
     st.sidebar.header("📁 Data Source")
@@ -372,7 +399,7 @@ def main():
     # Header
     st.markdown('<h1 class="main-header">🎵 Music AI Inferencing Dashboard</h1>', unsafe_allow_html=True)
     st.markdown("**Analyze your music listening patterns from 2016-2024 with AI-powered insights and Last.fm integration**")
-    st.markdown("**✨ Enhanced: Automatic CSV to JSON conversion + Improved error handling!**")
+    st.markdown("**🛡️ Bulletproof Edition: Unbreakable error handling + CSV support!**")
     
     # Setup data source
     data_file, is_csv = setup_data_source()
@@ -478,19 +505,30 @@ Another Song,Another Artist,0.60,0.70,0.80"""
             lambda x: any(genre in selected_genres for genre in x) if isinstance(x, list) else False
         )]
     
-    # Popularity filter
-    min_popularity, max_popularity = st.sidebar.slider(
-        "Popularity Range",
-        min_value=0,
-        max_value=100,
-        value=(0, 100),
-        help="Filter songs by Spotify popularity score"
-    )
-    
-    filtered_df = filtered_df[
-        (filtered_df['Popularity'] >= min_popularity) & 
-        (filtered_df['Popularity'] <= max_popularity)
-    ]
+    # BULLETPROOF FIX: Popularity filter with safe slider
+    if len(filtered_df) > 0:
+        min_pop = int(filtered_df['Popularity'].min())
+        max_pop = int(filtered_df['Popularity'].max())
+        
+        # Ensure min < max for slider
+        if min_pop >= max_pop:
+            if max_pop == 0:
+                min_pop, max_pop = 0, 1
+            else:
+                min_pop = max(0, max_pop - 1)
+        
+        min_popularity, max_popularity = st.sidebar.slider(
+            "Popularity Range",
+            min_value=min_pop,
+            max_value=max_pop,
+            value=(min_pop, max_pop),
+            help="Filter songs by Spotify popularity score"
+        )
+        
+        filtered_df = filtered_df[
+            (filtered_df['Popularity'] >= min_popularity) & 
+            (filtered_df['Popularity'] <= max_popularity)
+        ]
     
     # Setup Last.fm integration
     lastfm_api_key = setup_lastfm_integration()
@@ -498,7 +536,8 @@ Another Song,Another Artist,0.60,0.70,0.80"""
     # Display basic stats
     st.sidebar.markdown("---")
     st.sidebar.metric("Total Songs", len(filtered_df))
-    st.sidebar.metric("Years Span", f"{min(selected_years)}-{max(selected_years)}")
+    if len(selected_years) > 0:
+        st.sidebar.metric("Years Span", f"{min(selected_years)}-{max(selected_years)}")
     st.sidebar.metric("Unique Artists", filtered_df['Artist Name(s)'].nunique())
     
     if len(filtered_df) == 0:
@@ -590,25 +629,25 @@ Another Song,Another Artist,0.60,0.70,0.80"""
         st.header("🎯 AI-Powered Music Clustering")
         st.markdown("Discover hidden patterns in your music taste using machine learning clustering.")
         
-        # FIXED: Better clustering controls with validation
+        # BULLETPROOF: Better clustering controls with validation
         col1, col2 = st.columns([1, 3])
         
         with col1:
-            # FIX: Limit max clusters based on available data
+            # BULLETPROOF FIX: Limit max clusters based on available data
             max_possible_clusters = min(6, len(filtered_df))
             if max_possible_clusters < 2:
                 st.warning("⚠️ Need at least 2 songs for clustering")
                 n_clusters = 1
             else:
-                n_clusters = st.slider(
+                n_clusters = safe_slider(
                     "Number of Clusters", 
-                    min_value=2, 
-                    max_value=max_possible_clusters, 
-                    value=min(3, max_possible_clusters),
-                    help=f"Maximum {max_possible_clusters} clusters available for {len(filtered_df)} songs"
+                    min_val=2, 
+                    max_val=max_possible_clusters, 
+                    default_val=min(3, max_possible_clusters),
+                    help_text=f"Maximum {max_possible_clusters} clusters available for {len(filtered_df)} songs"
                 )
         
-        # FIXED: Perform clustering with improved error handling
+        # BULLETPROOF: Perform clustering with improved error handling
         try:
             clusters, kmeans, scaler = perform_clustering(filtered_df, n_clusters)
             filtered_df['Cluster'] = clusters
@@ -757,11 +796,20 @@ Another Song,Another Artist,0.60,0.70,0.80"""
         st.header("🎵 AI-Powered Dynamic Recommendations")
         st.markdown("Get personalized music recommendations based on your listening patterns using advanced AI algorithms.")
         
-        # Recommendation controls
+        # BULLETPROOF FIX: Recommendation controls with safe sliders
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            n_recommendations = st.slider("Number of Recommendations", 5, min(20, len(filtered_df)), min(10, len(filtered_df)))
+            # BULLETPROOF FIX: Safe slider for recommendations count
+            max_recs = len(filtered_df)
+            n_recommendations = safe_slider(
+                "Number of Recommendations", 
+                min_val=1, 
+                max_val=max(1, min(20, max_recs)), 
+                default_val=min(10, max_recs),
+                help_text=f"Maximum {max_recs} recommendations available"
+            )
+            
         with col2:
             randomness = st.slider("Randomness Level", 0.0, 0.5, 0.2, 
                                  help="Higher values = more diverse recommendations")
@@ -843,7 +891,13 @@ Another Song,Another Artist,0.60,0.70,0.80"""
             col1, col2 = st.columns(2)
             
             with col1:
-                max_recommendations = st.slider("Max Recommendations per Category", 5, 20, 10)
+                # BULLETPROOF FIX: Safe slider for Last.fm recommendations
+                max_recommendations = safe_slider(
+                    "Max Recommendations per Category", 
+                    min_val=1, 
+                    max_val=20, 
+                    default_val=10
+                )
             with col2:
                 if st.button("🔄 Get New Last.fm Recommendations"):
                     st.rerun()
