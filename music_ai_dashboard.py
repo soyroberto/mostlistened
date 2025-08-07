@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-🎵 Music AI Inferencing Dashboard - Final Version
+🎵 Music AI Inferencing Dashboard - Enhanced with CSV Support
 Comprehensive Streamlit app for analyzing music data from 2016-2024
-with AI inferencing, year filtering, dynamic recommendations, and Last.fm integration
+with AI inferencing, year filtering, dynamic recommendations, Last.fm integration,
+and automatic CSV to JSON conversion
 
-Usage: streamlit run music_ai_dashboard.py
+Usage: streamlit run music_ai_dashboard_enhanced.py
 """
 
 import streamlit as st
@@ -16,6 +17,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import random
 import os
+import tempfile
 from datetime import datetime
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -25,8 +27,9 @@ from sklearn.decomposition import PCA
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import Last.fm integration
+# Import Last.fm integration and CSV converter
 from lastfm_integration import LastFMAPI, generate_lastfm_recommendations, display_lastfm_recommendations, test_lastfm_api
+from csv_to_json_converter import convert_csv_to_json, validate_converted_data
 
 # Page configuration
 st.set_page_config(
@@ -76,15 +79,35 @@ st.markdown("""
         margin: 1rem 0;
         text-align: center;
     }
+    .csv-conversion-info {
+        background-color: #e7f3ff;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 5px solid #007bff;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 @st.cache_data
-def load_music_data(file_path):
+def load_music_data(file_path, is_csv=False):
     """Load and process music data with caching for performance"""
     try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
+        if is_csv:
+            # Convert CSV to JSON format
+            data = convert_csv_to_json(file_path)
+            
+            # Validate the converted data
+            is_valid, errors = validate_converted_data(data)
+            if not is_valid:
+                st.error(f"CSV conversion validation failed: {'; '.join(errors)}")
+                return None
+            
+            st.success(f"✅ Successfully converted CSV to JSON format ({len(data)} records)")
+        else:
+            # Load JSON file
+            with open(file_path, 'r') as f:
+                data = json.load(f)
         
         df = pd.DataFrame(data)
         
@@ -221,44 +244,65 @@ def generate_dynamic_recommendations(df, user_profile, n_recommendations=10, ran
     return recommendations[['Track Name', 'Artist Name(s)', 'Album Name', 'Similarity', 'Year', 'Popularity']]
 
 def setup_data_source():
-    """Setup data source selection"""
+    """Setup data source selection with CSV and JSON support"""
     st.sidebar.header("📁 Data Source")
     
     # Option to upload file or use existing path
     data_source = st.sidebar.radio(
         "Choose data source:",
-        ["Upload JSON file", "Use file path"]
+        ["Upload file", "Use file path"]
     )
     
     data_file = None
+    is_csv = False
     
-    if data_source == "Upload JSON file":
+    if data_source == "Upload file":
         uploaded_file = st.sidebar.file_uploader(
-            "Upload your Spotify history JSON file",
-            type=['json'],
-            help="Upload your spotify_history_final_cleaned.json file"
+            "Upload your music data file",
+            type=['json', 'csv'],
+            help="Upload your Spotify history JSON file or CSV file (will be auto-converted to JSON)"
         )
         
         if uploaded_file is not None:
+            # Determine file type
+            file_extension = uploaded_file.name.lower().split('.')[-1]
+            is_csv = file_extension == 'csv'
+            
             # Save uploaded file temporarily
             temp_path = f"/tmp/{uploaded_file.name}"
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             data_file = temp_path
+            
+            # Show conversion info for CSV files
+            if is_csv:
+                st.sidebar.markdown("""
+                <div class="csv-conversion-info">
+                    <h4>🔄 CSV Auto-Conversion</h4>
+                    <p>Your CSV file will be automatically converted to JSON format for analysis.</p>
+                </div>
+                """, unsafe_allow_html=True)
     else:
         # File path input
         default_path = "./spotify_history_final_cleaned.json"
         data_file = st.sidebar.text_input(
-            "File path to JSON data:",
+            "File path to music data:",
             value=default_path,
-            help="Enter the path to your spotify_history_final_cleaned.json file"
+            help="Enter the path to your JSON or CSV file"
         )
         
-        if data_file and not os.path.exists(data_file):
+        if data_file and os.path.exists(data_file):
+            # Determine file type from extension
+            file_extension = data_file.lower().split('.')[-1]
+            is_csv = file_extension == 'csv'
+            
+            if is_csv:
+                st.sidebar.info("🔄 CSV file detected - will be auto-converted to JSON")
+        elif data_file:
             st.sidebar.error(f"File not found: {data_file}")
             data_file = None
     
-    return data_file
+    return data_file, is_csv
 
 def setup_lastfm_integration():
     """Setup Last.fm integration in sidebar"""
@@ -294,47 +338,71 @@ def main():
     # Header
     st.markdown('<h1 class="main-header">🎵 Music AI Inferencing Dashboard</h1>', unsafe_allow_html=True)
     st.markdown("**Analyze your music listening patterns from 2016-2024 with AI-powered insights and Last.fm integration**")
+    st.markdown("**✨ New: Automatic CSV to JSON conversion support!**")
     
     # Setup data source
-    data_file = setup_data_source()
+    data_file, is_csv = setup_data_source()
     
     if not data_file:
         st.markdown("""
         <div class="upload-section">
             <h3>🎵 Welcome to Music AI Dashboard!</h3>
-            <p>To get started, please upload your Spotify history JSON file or specify the file path in the sidebar.</p>
-            <p><strong>Expected format:</strong> JSON file with Spotify track data including audio features</p>
-            <p><strong>Example fields:</strong> Track Name, Artist Name(s), Danceability, Energy, Valence, etc.</p>
+            <p>To get started, please upload your music data file or specify the file path in the sidebar.</p>
+            <p><strong>Supported formats:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li><strong>JSON</strong> - Direct compatibility with dashboard</li>
+                <li><strong>CSV</strong> - Automatically converted to JSON format</li>
+            </ul>
+            <p><strong>Expected fields:</strong> Track Name, Artist Name(s), Danceability, Energy, Valence, etc.</p>
         </div>
         """, unsafe_allow_html=True)
         
         # Show sample data format
         st.subheader("📋 Expected Data Format")
-        sample_data = {
-            "Track URI": "spotify:track:example",
-            "Track Name": "Example Song",
-            "Artist Name(s)": "Example Artist",
-            "Album Name": "Example Album",
-            "Year": 2023,
-            "Danceability": 0.75,
-            "Energy": 0.85,
-            "Valence": 0.65,
-            "Acousticness": 0.15,
-            "Instrumentalness": 0.05,
-            "Liveness": 0.12,
-            "Speechiness": 0.08,
-            "Popularity": 75,
-            "Genres": ["pop", "electronic"]
-        }
-        st.json(sample_data)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**JSON Format:**")
+            sample_json = {
+                "Track URI": "spotify:track:example",
+                "Track Name": "Example Song",
+                "Artist Name(s)": "Example Artist",
+                "Album Name": "Example Album",
+                "Year": 2023,
+                "Danceability": 0.75,
+                "Energy": 0.85,
+                "Valence": 0.65,
+                "Acousticness": 0.15,
+                "Instrumentalness": 0.05,
+                "Liveness": 0.12,
+                "Speechiness": 0.08,
+                "Popularity": 75,
+                "Genres": ["pop", "electronic"]
+            }
+            st.json(sample_json)
+        
+        with col2:
+            st.write("**CSV Format (will be auto-converted):**")
+            sample_csv = """Track Name,Artist Name(s),Danceability,Energy,Valence
+Example Song,Example Artist,0.75,0.85,0.65
+Another Song,Another Artist,0.60,0.70,0.80"""
+            st.code(sample_csv, language="csv")
+        
         return
     
     # Load data
-    df = load_music_data(data_file)
+    df = load_music_data(data_file, is_csv)
     
     if df is None:
         st.error("Failed to load music data. Please check the file format and try again.")
         return
+    
+    # Show data source info
+    if is_csv:
+        st.info(f"📊 Loaded CSV data with automatic JSON conversion: {len(df)} tracks")
+    else:
+        st.info(f"📊 Loaded JSON data: {len(df)} tracks")
     
     # Sidebar controls
     st.sidebar.header("🎛️ Controls")
