@@ -2,7 +2,8 @@ import streamlit as st
 import requests
 # Song preview from Apple Music
 # This script allows users to search for songs on Apple Music and listen to previews
-st.title("🎶 Apple Music Previewer")
+st.title("👩🏻‍🎤 Music Previewer powered by Apple 👩🏻‍🎤")
+st.markdown("Search for songs and listen to 30-second previews!")
 
 search_term = st.text_input("Search for a song or artist", "Everything But the Girl")
 
