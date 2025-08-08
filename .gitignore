@@ -6,3 +6,4 @@ setup.sh
 music_ai_dashboard_fixed.py
 spo2.py
 .gitignore
+sporeview.py
