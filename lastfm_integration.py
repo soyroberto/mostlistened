@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Last.fm API Integration Module
+Last.fm API Integration Module - Fixed for Classical Music
 Provides functions to get similar artists and tracks from Last.fm
+FIXED: Handles comma-separated artist names for classical music
 """
 
 import requests
@@ -9,6 +10,7 @@ import json
 import time
 from typing import List, Dict, Optional
 import streamlit as st
+import re
 
 class LastFMAPI:
     """Last.fm API client for music recommendations"""
@@ -193,14 +195,75 @@ class LastFMAPI:
         
         return top_tracks
 
+def split_artist_names(artist_string: str) -> List[str]:
+    """
+    FIXED: Split comma-separated artist names into individual artists
+    
+    Handles classical music cases like:
+    - "Ludwig van Beethoven,Berliner Philharmoniker,Herbert von Karajan"
+    - "Johann Sebastian Bach,Zino Francescatti,Lucerne Festival Strings,Rudolf Baumgartner"
+    
+    Args:
+        artist_string: Comma-separated artist names
+        
+    Returns:
+        List of individual artist names, cleaned and filtered
+    """
+    if not artist_string:
+        return []
+    
+    # Split by comma and clean each artist name
+    artists = [artist.strip() for artist in artist_string.split(',')]
+    
+    # Filter out empty strings and very short names (likely not real artist names)
+    artists = [artist for artist in artists if len(artist) > 2]
+    
+    # For classical music, prioritize composer names (usually first) and well-known performers
+    # Common classical music patterns to prioritize
+    classical_composers = [
+        'bach', 'beethoven', 'mozart', 'chopin', 'brahms', 'tchaikovsky', 
+        'vivaldi', 'handel', 'haydn', 'schubert', 'schumann', 'liszt',
+        'debussy', 'ravel', 'stravinsky', 'prokofiev', 'rachmaninoff',
+        'mendelssohn', 'grieg', 'sibelius', 'dvorak', 'wagner', 'verdi',
+        'puccini', 'rossini', 'donizetti', 'bellini', 'monteverdi',
+        'purcell', 'palestrina', 'victoria', 'hildegard', 'caldara'
+    ]
+    
+    # Prioritize composers and solo performers over orchestras/ensembles
+    prioritized_artists = []
+    other_artists = []
+    
+    for artist in artists:
+        artist_lower = artist.lower()
+        
+        # Check if it's a composer
+        is_composer = any(composer in artist_lower for composer in classical_composers)
+        
+        # Check if it's likely an orchestra/ensemble (contains certain keywords)
+        orchestra_keywords = ['orchestra', 'philharmonic', 'symphony', 'ensemble', 'choir', 'chor', 'quartet', 'quintet']
+        is_ensemble = any(keyword in artist_lower for keyword in orchestra_keywords)
+        
+        if is_composer:
+            prioritized_artists.insert(0, artist)  # Composers first
+        elif not is_ensemble:
+            prioritized_artists.append(artist)  # Solo performers next
+        else:
+            other_artists.append(artist)  # Orchestras/ensembles last
+    
+    # Combine prioritized artists with others, limit to avoid too many API calls
+    final_artists = prioritized_artists + other_artists
+    
+    # Return top 3 artists to balance API efficiency with coverage
+    return final_artists[:3]
+
 def generate_lastfm_recommendations(lastfm_api: LastFMAPI, user_artists: List[str], 
                                   user_tracks: List[tuple], max_recommendations: int = 20) -> Dict:
     """
-    Generate recommendations using Last.fm API based on user's listening history
+    FIXED: Generate recommendations using Last.fm API with comma-separated artist handling
     
     Args:
         lastfm_api: LastFMAPI instance
-        user_artists: List of artist names from user's library
+        user_artists: List of artist names from user's library (may contain comma-separated names)
         user_tracks: List of (artist, track) tuples from user's library
         max_recommendations: Maximum number of recommendations to return
     
@@ -214,20 +277,44 @@ def generate_lastfm_recommendations(lastfm_api: LastFMAPI, user_artists: List[st
         'top_tracks_from_similar_artists': []
     }
     
+    # FIXED: Split comma-separated artist names before processing
+    expanded_artists = []
+    for artist_string in user_artists[:10]:  # Limit initial artists to avoid too many API calls
+        individual_artists = split_artist_names(artist_string)
+        expanded_artists.extend(individual_artists)
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_artists = []
+    for artist in expanded_artists:
+        if artist not in seen:
+            seen.add(artist)
+            unique_artists.append(artist)
+    
+    # Limit to top artists to manage API rate limits
+    final_artists = unique_artists[:8]
+    
     # Get similar artists based on user's top artists
     st.write("🔍 Finding similar artists...")
     progress_bar = st.progress(0)
     
-    for i, artist in enumerate(user_artists[:5]):  # Limit to top 5 artists to avoid rate limits
-        similar_artists = lastfm_api.get_similar_artists(artist, limit=5)
-        recommendations['similar_artists'].extend(similar_artists)
-        progress_bar.progress((i + 1) / 5)
+    for i, artist in enumerate(final_artists):
+        try:
+            similar_artists = lastfm_api.get_similar_artists(artist, limit=5)
+            if similar_artists:  # Only add if we got results
+                recommendations['similar_artists'].extend(similar_artists)
+            else:
+                st.write(f"   No similar artists found for: {artist}")
+        except Exception as e:
+            st.write(f"   Error getting similar artists for {artist}: {str(e)}")
+        
+        progress_bar.progress((i + 1) / len(final_artists))
     
     # Remove duplicates and sort by match score
     seen_artists = set()
     unique_similar_artists = []
     for artist in recommendations['similar_artists']:
-        if artist['name'] not in seen_artists and artist['name'] not in user_artists:
+        if artist['name'] not in seen_artists and artist['name'] not in final_artists:
             seen_artists.add(artist['name'])
             unique_similar_artists.append(artist)
     
@@ -237,19 +324,35 @@ def generate_lastfm_recommendations(lastfm_api: LastFMAPI, user_artists: List[st
         reverse=True
     )[:max_recommendations]
     
-    # Get similar tracks based on user's tracks
+    # FIXED: Handle comma-separated artists in track recommendations
     st.write("🎵 Finding similar tracks...")
     progress_bar = st.progress(0)
     
-    for i, (artist, track) in enumerate(user_tracks[:5]):  # Limit to top 5 tracks
-        similar_tracks = lastfm_api.get_similar_tracks(artist, track, limit=3)
-        recommendations['similar_tracks'].extend(similar_tracks)
-        progress_bar.progress((i + 1) / 5)
+    processed_tracks = []
+    for artist_string, track in user_tracks[:8]:  # Limit to avoid rate limits
+        # Split artist names and try with the primary artist (usually first/composer)
+        individual_artists = split_artist_names(artist_string)
+        if individual_artists:
+            # Use the first (most important) artist for track similarity
+            primary_artist = individual_artists[0]
+            processed_tracks.append((primary_artist, track))
+    
+    for i, (artist, track) in enumerate(processed_tracks):
+        try:
+            similar_tracks = lastfm_api.get_similar_tracks(artist, track, limit=3)
+            if similar_tracks:
+                recommendations['similar_tracks'].extend(similar_tracks)
+            else:
+                st.write(f"   No similar tracks found for: {track} by {artist}")
+        except Exception as e:
+            st.write(f"   Error getting similar tracks for {track} by {artist}: {str(e)}")
+        
+        progress_bar.progress((i + 1) / len(processed_tracks))
     
     # Remove duplicates and sort by match score
     seen_tracks = set()
     unique_similar_tracks = []
-    user_track_set = set(f"{artist}|{track}" for artist, track in user_tracks)
+    user_track_set = set(f"{artist}|{track}" for artist, track in processed_tracks)
     
     for track in recommendations['similar_tracks']:
         track_key = f"{track['artist']}|{track['name']}"
@@ -267,12 +370,16 @@ def generate_lastfm_recommendations(lastfm_api: LastFMAPI, user_artists: List[st
     st.write("🎤 Getting top tracks from similar artists...")
     progress_bar = st.progress(0)
     
-    for i, artist_info in enumerate(recommendations['similar_artists'][:3]):  # Top 3 similar artists
-        top_tracks = lastfm_api.get_top_tracks_by_artist(artist_info['name'], limit=3)
-        for track in top_tracks:
-            track['similarity_score'] = artist_info['match']  # Inherit similarity from artist
-        recommendations['top_tracks_from_similar_artists'].extend(top_tracks)
-        progress_bar.progress((i + 1) / 3)
+    for i, artist_info in enumerate(recommendations['similar_artists'][:5]):  # Top 5 similar artists
+        try:
+            top_tracks = lastfm_api.get_top_tracks_by_artist(artist_info['name'], limit=3)
+            for track in top_tracks:
+                track['similarity_score'] = artist_info['match']  # Inherit similarity from artist
+            recommendations['top_tracks_from_similar_artists'].extend(top_tracks)
+        except Exception as e:
+            st.write(f"   Error getting top tracks for {artist_info['name']}: {str(e)}")
+        
+        progress_bar.progress((i + 1) / min(5, len(recommendations['similar_artists'])))
     
     # Sort by artist similarity and track popularity
     recommendations['top_tracks_from_similar_artists'] = sorted(
@@ -282,6 +389,9 @@ def generate_lastfm_recommendations(lastfm_api: LastFMAPI, user_artists: List[st
     )[:max_recommendations]
     
     progress_bar.empty()
+    
+    # Show summary of what was processed
+    st.success(f"✅ Processed {len(final_artists)} individual artists from {len(user_artists)} original entries")
     
     return recommendations
 
