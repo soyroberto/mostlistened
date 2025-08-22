@@ -5,7 +5,7 @@ import requests
 st.title("👩🏻‍🎤 Music Previewer 👩🏻‍🎤")
 st.markdown("Search for songs and listen to 30-second previews!")
 
-search_term = st.text_input("Search for a song or artist, you can type artist song name, ex: Everything But the Girl wrong", "Everything But the Girl wrong")
+search_term = st.text_input("Search for a song or artist, you can type artist song name, ex: Everything But the Girl wrong")
 st.markdown("By @soyroberto")
 if st.button("¡Search!"):
     url = f"https://itunes.apple.com/search?term={search_term}&media=music&limit=10"
